@@ -196,6 +196,10 @@
             <p class="loading-status">
               {{ loadingStatus }}
             </p>
+            <!-- 流式输出区域：LLM 生成随 token 逐步显示 -->
+            <div v-if="streamingText" class="streaming-box">
+              <pre class="streaming-content">{{ streamingText }}</pre>
+            </div>
           </div>
         </a-form-item>
       </a-form>
@@ -207,7 +211,7 @@
 import { ref, reactive, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { message } from 'ant-design-vue'
-import { generateTripPlan } from '@/services/api'
+import { generateTripPlanStream } from '@/services/api'
 import type { TripFormData } from '@/types'
 import type { Dayjs } from 'dayjs'
 
@@ -215,6 +219,7 @@ const router = useRouter()
 const loading = ref(false)
 const loadingProgress = ref(0)
 const loadingStatus = ref('')
+const streamingText = ref('')  // LLM 流式输出累积文本
 
 const formData = reactive<TripFormData & { start_date: Dayjs | null; end_date: Dayjs | null }>({
   city: '',
@@ -251,25 +256,8 @@ const handleSubmit = async () => {
 
   loading.value = true
   loadingProgress.value = 0
-  loadingStatus.value = '正在初始化...'
-
-  // 模拟进度更新
-  const progressInterval = setInterval(() => {
-    if (loadingProgress.value < 90) {
-      loadingProgress.value += 10
-
-      // 更新状态文本
-      if (loadingProgress.value <= 30) {
-        loadingStatus.value = '🔍 正在搜索景点...'
-      } else if (loadingProgress.value <= 50) {
-        loadingStatus.value = '🌤️ 正在查询天气...'
-      } else if (loadingProgress.value <= 70) {
-        loadingStatus.value = '🏨 正在推荐酒店...'
-      } else {
-        loadingStatus.value = '📋 正在生成行程计划...'
-      }
-    }
-  }, 500)
+  loadingStatus.value = '🚀 正在启动 AI 规划引擎...'
+  streamingText.value = ''
 
   try {
     const requestData: TripFormData = {
@@ -283,19 +271,24 @@ const handleSubmit = async () => {
       free_text_input: formData.free_text_input
     }
 
-    const response = await generateTripPlan(requestData)
+    const response = await generateTripPlanStream(requestData, (evt) => {
+      if (evt.step === 'stream_chunk') {
+        // LLM token 流：累积到流式文字框
+        streamingText.value += evt.streamText ?? ''
+        return
+      }
+      if (evt.percent >= 0) {
+        loadingProgress.value = evt.percent
+      }
+      loadingStatus.value = evt.message
+    })
 
-    clearInterval(progressInterval)
     loadingProgress.value = 100
     loadingStatus.value = '✅ 完成!'
 
     if (response.success && response.data) {
-      // 保存到sessionStorage
       sessionStorage.setItem('tripPlan', JSON.stringify(response.data))
-
       message.success('旅行计划生成成功!')
-
-      // 短暂延迟后跳转
       setTimeout(() => {
         router.push('/result')
       }, 500)
@@ -303,13 +296,13 @@ const handleSubmit = async () => {
       message.error(response.message || '生成失败')
     }
   } catch (error: any) {
-    clearInterval(progressInterval)
     message.error(error.message || '生成旅行计划失败,请稍后重试')
   } finally {
     setTimeout(() => {
       loading.value = false
       loadingProgress.value = 0
       loadingStatus.value = ''
+      streamingText.value = ''
     }, 1000)
   }
 }
@@ -621,6 +614,28 @@ const handleSubmit = async () => {
   color: #667eea;
   font-size: 18px;
   font-weight: 500;
+}
+
+/* LLM 流式输出文字框 */
+.streaming-box {
+  margin-top: 12px;
+  text-align: left;
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid rgba(102, 126, 234, 0.25);
+  border-radius: 8px;
+  background: rgba(102, 126, 234, 0.04);
+}
+
+.streaming-content {
+  margin: 0;
+  padding: 10px 14px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: #555;
+  font-family: 'SFMono-Regular', Consolas, monospace;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* 动画 */

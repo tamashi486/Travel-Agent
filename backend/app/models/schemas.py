@@ -1,8 +1,9 @@
 """数据模型定义"""
 
+import re
 from typing import List, Optional, Union
 from pydantic import BaseModel, Field, field_validator
-from datetime import date
+from datetime import date, datetime
 
 
 # ============ 请求模型 ============
@@ -17,6 +18,33 @@ class TripRequest(BaseModel):
     accommodation: str = Field(..., description="住宿偏好", example="经济型酒店")
     preferences: List[str] = Field(default=[], description="旅行偏好标签", example=["历史文化", "美食"])
     free_text_input: Optional[str] = Field(default="", description="额外要求", example="希望多安排一些博物馆")
+
+    @field_validator('city')
+    @classmethod
+    def validate_city(cls, v: str) -> str:
+        v = v.strip()
+        if not v or len(v) > 50:
+            raise ValueError("城市名称不能为空且长度不能超过50字符")
+        if re.search(r'[<>&\'";\\/]', v):
+            raise ValueError("城市名称包含非法字符")
+        return v
+
+    @field_validator('start_date', 'end_date')
+    @classmethod
+    def validate_date_format(cls, v: str) -> str:
+        try:
+            datetime.strptime(v, "%Y-%m-%d")
+        except ValueError:
+            raise ValueError(f"日期格式错误，应为 YYYY-MM-DD: {v}")
+        return v
+
+    @field_validator('free_text_input')
+    @classmethod
+    def sanitize_free_text(cls, v: Optional[str]) -> Optional[str]:
+        if v:
+            v = re.sub(r'<[^>]+>', '', v)  # 移除 HTML 标签
+            return v[:500]  # 限制长度
+        return v
     
     class Config:
         json_schema_extra = {

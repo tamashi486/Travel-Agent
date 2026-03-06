@@ -316,6 +316,7 @@ import AMapLoader from '@amap/amap-jsapi-loader'
 import html2canvas from 'html2canvas'
 import jsPDF from 'jspdf'
 import type { TripPlan } from '@/types'
+import { fetchAttractionPhotos } from '@/services/api'
 
 const router = useRouter()
 const tripPlan = ref<TripPlan | null>(null)
@@ -330,16 +331,32 @@ onMounted(async () => {
   const data = sessionStorage.getItem('tripPlan')
   if (data) {
     tripPlan.value = JSON.parse(data)
-    // 加载景点图片
-    await loadAttractionPhotos()
     // 等待DOM渲染完成后初始化地图
     await nextTick()
     initMap()
+    // 异步加载景点图片
+    loadAttractionPhotos()
   }
 })
 
 const goBack = () => {
   router.push('/')
+}
+
+// 异步加载景点真实图片
+const loadAttractionPhotos = async () => {
+  if (!tripPlan.value) return
+  const names = new Set<string>()
+  tripPlan.value.days.forEach(day => {
+    day.attractions.forEach(attr => names.add(attr.name))
+  })
+  if (names.size === 0) return
+  try {
+    const photos = await fetchAttractionPhotos([...names], tripPlan.value.city)
+    attractionPhotos.value = { ...attractionPhotos.value, ...photos }
+  } catch (e) {
+    console.warn('加载景点图片失败', e)
+  }
 }
 
 // 滚动到指定区域
@@ -422,32 +439,6 @@ const getMealLabel = (type: string): string => {
     snack: '小吃'
   }
   return labels[type] || type
-}
-
-// 加载所有景点图片
-const loadAttractionPhotos = async () => {
-  if (!tripPlan.value) return
-
-  const promises: Promise<void>[] = []
-
-  tripPlan.value.days.forEach(day => {
-    day.attractions.forEach(attraction => {
-      const promise = fetch(`http://localhost:8000/api/poi/photo?name=${encodeURIComponent(attraction.name)}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.success && data.data.photo_url) {
-            attractionPhotos.value[attraction.name] = data.data.photo_url
-          }
-        })
-        .catch(err => {
-          console.error(`获取${attraction.name}图片失败:`, err)
-        })
-
-      promises.push(promise)
-    })
-  })
-
-  await Promise.all(promises)
 }
 
 // 获取景点图片
@@ -832,9 +823,11 @@ const restoreMap = () => {
 // 初始化地图
 const initMap = async () => {
   try {
+    // AMap JS API 2.0 需要安全密钥才能加载底图瓦片
+    // 使用 1.4.15 版本可直接使用 key 即可，无需额外安全配置
     const AMap = await AMapLoader.load({
-      key: import.meta.env.VITE_AMAP_WEB_JS_KEY,  // 高德地图Web端(JS API) Key
-      version: '2.0',
+      key: import.meta.env.VITE_AMAP_WEB_JS_KEY,
+      version: '1.4.15',
       plugins: ['AMap.Marker', 'AMap.Polyline', 'AMap.InfoWindow']
     })
 
@@ -842,7 +835,7 @@ const initMap = async () => {
     map = new AMap.Map('amap-container', {
       zoom: 12,
       center: [116.397128, 39.916527], // 默认中心点(北京)
-      viewMode: '3D'
+      resizeEnable: true
     })
 
     // 添加景点标记

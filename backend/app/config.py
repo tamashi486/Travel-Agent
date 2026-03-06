@@ -1,111 +1,123 @@
 """配置管理模块"""
 
+import logging
 import os
 from pathlib import Path
 from typing import List
 from pydantic_settings import BaseSettings
 from dotenv import load_dotenv
 
-# 加载环境变量
-# 首先尝试加载当前目录的.env
-load_dotenv()
+logger = logging.getLogger(__name__)
 
-# 然后尝试加载HelloAgents的.env(如果存在)
-helloagents_env = Path(__file__).parent.parent.parent.parent / "HelloAgents" / ".env"
-if helloagents_env.exists():
-    load_dotenv(helloagents_env, override=False)  # 不覆盖已有的环境变量
+# 项目根目录 = trip-planner/
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
+# 加载根目录 .env（不覆盖已经存在的环境变量，适配 CI/CD 注入场景）
+load_dotenv(_ENV_FILE, override=False)
 
 
 class Settings(BaseSettings):
-    """应用配置"""
+    """
+    应用配置——字段名即环境变量名，零中间转换。
 
-    # 应用基本配置
-    app_name: str = "HelloAgents智能旅行助手"
-    app_version: str = "1.0.0"
+    监控 .env 中的字段名：
+      LLM_API_KEY / LLM_BASE_URL / LLM_MODEL_ID / LLM_TIMEOUT
+      AMAP_API_KEY
+      HOST / PORT / CORS_ORIGINS / LOG_LEVEL
+    """
+
+    # 应用基本信息
+    app_name: str = "LangGraph智能旅行助手"
+    app_version: str = "2.1.0"
     debug: bool = False
 
-    # 服务器配置
+    # 服务器
     host: str = "0.0.0.0"
     port: int = 8000
 
-    # CORS配置 - 使用字符串,在代码中分割
+    # CORS
     cors_origins: str = "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000"
 
-    # 高德地图API配置
-    amap_api_key: str = ""
-
-    # Unsplash API配置
-    unsplash_access_key: str = ""
-    unsplash_secret_key: str = ""
-
-    # LLM配置 (从环境变量读取,由HelloAgents管理)
-    openai_api_key: str = ""
-    openai_base_url: str = "https://api.openai.com/v1"
-    openai_model: str = "gpt-4"
-
-    # 日志配置
+    # 日志
     log_level: str = "INFO"
 
+    # 高德地图（由 backend 传递给 Amap MCP Server 子进程）
+    amap_api_key: str = ""
+
+    # Amap MCP Server 路径（空则自动定位）
+    mcp_server_path: str = ""
+
+    # Unsplash
+    unsplash_access_key: str = ""
+
+    # Redis 缓存（REDIS_URL 为空则禁用缓存，不影响主流程）
+    redis_url: str = ""          # e.g. redis://localhost:6379/0
+    trip_cache_ttl: int = 86400  # 缓存有效期（秒），默认 24 小时
+
+    # LLM（字段名与 .env 中一致）
+    llm_api_key: str = ""
+    llm_base_url: str = ""
+    llm_model_id: str = "gpt-4o"
+    llm_timeout: int = 300
+
     class Config:
-        env_file = ".env"
+        env_file = str(_ENV_FILE)
         case_sensitive = False
-        extra = "ignore"  # 忽略额外的环境变量
+        extra = "ignore"
 
     def get_cors_origins_list(self) -> List[str]:
-        """获取CORS origins列表"""
-        return [origin.strip() for origin in self.cors_origins.split(',')]
+        return [o.strip() for o in self.cors_origins.split(",")]
 
 
-# 创建全局配置实例
+# 全局单例
 settings = Settings()
 
 
 def get_settings() -> Settings:
-    """获取配置实例"""
     return settings
 
 
-# 验证必要的配置
+def get_mcp_server_path() -> str:
+    """MCP Server 脚本绝对路径，静态计算无需配置运行时解析"""
+    configured = settings.mcp_server_path
+    if configured:
+        return configured
+    return str(_PROJECT_ROOT / "mcp-server" / "server.py")
+
+
 def validate_config():
-    """验证配置是否完整"""
-    errors = []
+    """Warn about missing optional keys, raise on fatal ones."""
     warnings = []
-
     if not settings.amap_api_key:
-        errors.append("AMAP_API_KEY未配置")
-
-    # HelloAgentsLLM会自动从LLM_API_KEY读取,不强制要求OPENAI_API_KEY
-    llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    if not llm_api_key:
-        warnings.append("LLM_API_KEY或OPENAI_API_KEY未配置,LLM功能可能无法使用")
-
-    if errors:
-        error_msg = "配置错误:\n" + "\n".join(f"  - {e}" for e in errors)
-        raise ValueError(error_msg)
-
+        warnings.append("AMAP_API_KEY 未配置，Amap MCP 工具将无法调用")
+    if not settings.llm_api_key:
+        warnings.append("LLM_API_KEY 未配置，LLM 功能将无法使用")
+    mcp_path = get_mcp_server_path()
+    if not Path(mcp_path).exists():
+        warnings.append(f"MCP Server 未找到: {mcp_path}")
     if warnings:
-        print("\n⚠️  配置警告:")
         for w in warnings:
-            print(f"  - {w}")
-
+            logger.warning(w)
     return True
 
 
-# 打印配置信息(用于调试)
 def print_config():
-    """打印当前配置(隐藏敏感信息)"""
-    print(f"应用名称: {settings.app_name}")
-    print(f"版本: {settings.app_version}")
+    logger.info(f"应用: {settings.app_name} v{settings.app_version}")
+
+
+def setup_logging():
+    """配置全局日志格式与级别"""
+    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
     print(f"服务器: {settings.host}:{settings.port}")
-    print(f"高德地图API Key: {'已配置' if settings.amap_api_key else '未配置'}")
-
-    # 检查LLM配置
-    llm_api_key = os.getenv("LLM_API_KEY") or os.getenv("OPENAI_API_KEY")
-    llm_base_url = os.getenv("LLM_BASE_URL") or settings.openai_base_url
-    llm_model = os.getenv("LLM_MODEL_ID") or settings.openai_model
-
-    print(f"LLM API Key: {'已配置' if llm_api_key else '未配置'}")
-    print(f"LLM Base URL: {llm_base_url}")
-    print(f"LLM Model: {llm_model}")
+    print(f"LLM API Key: {'已配置' if settings.llm_api_key else '未配置'}")
+    print(f"LLM Base URL: {settings.llm_base_url or '(默认 OpenAI)'}")
+    print(f"LLM Model: {settings.llm_model_id}")
+    print(f"Amap API Key: {'已配置' if settings.amap_api_key else '未配置'}")
+    print(f"Amap MCP Server: {get_mcp_server_path()}")
     print(f"日志级别: {settings.log_level}")
-

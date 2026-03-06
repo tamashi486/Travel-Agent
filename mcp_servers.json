@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "amap": {
+      "command": "${PYTHON}",
+      "args": ["mcp-server/server.py"],
+      "env": {
+        "AMAP_API_KEY": "${AMAP_API_KEY}"
+      }
+    }
+  }
+}

@@ -1,61 +1,96 @@
 # 智能旅行助手 🌍✈️
 
-基于HelloAgents框架构建的智能旅行规划助手,集成高德地图MCP服务,提供个性化的旅行计划生成。
+基于 **LangGraph** 框架构建的多智能体旅行规划助手，集成高德地图 MCP Server 与 Unsplash 图片服务，通过 SSE 实时流式推送 Agent 执行进度，提供个性化旅行计划生成。
 
 ## ✨ 功能特点
 
-- 🤖 **AI驱动的旅行规划**: 基于HelloAgents框架的SimpleAgent,智能生成详细的多日旅程
-- 🗺️ **高德地图集成**: 通过MCP协议接入高德地图服务,支持景点搜索、路线规划、天气查询
-- 🧠 **智能工具调用**: Agent自动调用高德地图MCP工具,获取实时POI、路线和天气信息
-- 🎨 **现代化前端**: Vue3 + TypeScript + Vite,响应式设计,流畅的用户体验
-- 📱 **完整功能**: 包含住宿、交通、餐饮和景点游览时间推荐
+- 🤖 **LangGraph 多智能体协作**: 使用 `StateGraph` 编排景点搜索、天气查询、酒店推荐、行程规划四个专业 Agent，天气与酒店节点**并行执行**
+- 🗺️ **Amap MCP Server 解耦**: 独立 MCP Server 进程封装高德地图 API（search_poi / get_weather / geocode / plan_route / get_poi_detail），通过 stdio 协议与 Agent 通信
+- 🧠 **ReAct 工具调用 + 重试**: 每个 Agent 节点基于 `create_react_agent`，支持指数退避重试，单节点失败自动降级不阻断管线
+- 📡 **SSE 实时进度流**: 前端通过 Server-Sent Events 实时接收 Agent 各阶段进度，LLM 生成期间心跳保持连接
+- ⚡ **Redis 行程缓存**: 缓存层位于路由层，相同城市+日期+偏好的请求命中缓存后跳过全部 Agent 执行（TTL 24h）；`REDIS_URL` 为空时自动禁用
+- 📊 **结构化日志 + 请求追踪**: 全链路 `logging` 模块替代 print，每个请求携带唯一 `request_id`
+- 🛡️ **接口限流 + 输入校验**: 内存级 Rate Limiting（每 IP 每分钟 10 次规划请求），Pydantic 字段级安全校验
+- 📸 **Unsplash 景点图片**: 批量异步获取景点真实照片，串行 + 延迟策略规避速率限制
+- 🎨 **现代化前端**: Vue 3 + TypeScript + Vite + Ant Design Vue，支持行程编辑、地图展示、PNG/PDF 导出
 
 ## 🏗️ 技术栈
 
 ### 后端
-- **框架**: HelloAgents (基于SimpleAgent)
-- **API**: FastAPI
-- **MCP工具**: amap-mcp-server (高德地图)
-- **LLM**: 支持多种LLM提供商(OpenAI, DeepSeek等)
+- **多智能体框架**: LangGraph (`StateGraph` + `create_react_agent`)
+- **LLM 接入**: LangChain / langchain-openai (`ChatOpenAI`，兼容 DeepSeek 等 OpenAI 格式接口)
+- **MCP 工具适配**: langchain-mcp-adapters + 自建 Amap MCP Server (FastMCP)
+- **API 服务**: FastAPI + Uvicorn（lifespan 生命周期管理）
+- **缓存**: Redis（行程结果精确缓存，`REDIS_URL` 为空时自动禁用）
+- **中间件**: RequestID 追踪、Rate Limiting、CORS
+- **日志**: Python logging 结构化日志
 
 ### 前端
 - **框架**: Vue 3 + TypeScript
 - **构建工具**: Vite
-- **UI组件库**: Ant Design Vue
+- **UI 组件库**: Ant Design Vue
 - **地图服务**: 高德地图 JavaScript API
-- **HTTP客户端**: Axios
+- **HTTP 客户端**: Axios + Fetch (SSE)
+- **导出**: html2canvas + jsPDF
+
+### MCP Server
+- **框架**: FastMCP (mcp[cli])
+- **通信**: stdio 协议
+- **数据源**: 高德地图 REST API (httpx)
+
+## 🔄 LangGraph 工作流
+
+```
+用户请求
+   │
+   ▼
+search_attractions    ──→    weather_and_hotels    ──→    generate_plan
+(ReAct Agent)               ┌─ query_weather ─┐          (ChatOpenAI)
+ MCP: search_poi            │  (ReAct Agent)  │          整合生成 JSON
+                            │  MCP: get_weather│
+                            ├─ search_hotels ──┤
+                            │  (ReAct Agent)  │
+                            │  MCP: search_poi │
+                            └─────────────────┘
+                              ↑ 并行执行 ↑
+```
+
+三阶段管线：景点搜索 → 天气+酒店（并行） → 行程规划（流式 token 输出），共享 `TripPlannerState`。
 
 ## 📁 项目结构
 
 ```
-helloagents-trip-planner/
+trip-planner/
+├── .env                        # 全局环境变量（唯一配置源）
+├── mcp_servers.json            # MCP Server 声明（兼容 Claude Desktop / Cursor 格式）
 ├── backend/                    # 后端服务
-│   ├── app/
-│   │   ├── agents/            # Agent实现
-│   │   │   └── trip_planner_agent.py
-│   │   ├── api/               # FastAPI路由
-│   │   │   ├── main.py
-│   │   │   └── routes/
-│   │   │       ├── trip.py
-│   │   │       └── map.py
-│   │   ├── services/          # 服务层
-│   │   │   ├── amap_service.py
-│   │   │   └── llm_service.py
-│   │   ├── models/            # 数据模型
-│   │   │   └── schemas.py
-│   │   └── config.py          # 配置管理
-│   ├── requirements.txt
-│   ├── .env.example
-│   └── .gitignore
+│   ├── run.py                  # 入口脚本
+│   └── app/
+│       ├── agents/
+│       │   └── trip_planner_agent.py   # LangGraph StateGraph + 并行节点
+│       ├── api/
+│       │   ├── main.py                 # FastAPI lifespan + 中间件
+│       │   └── routes/
+│       │       └── trip.py             # 旅行规划 / SSE / 图片端点
+│       ├── services/
+│       │   ├── llm_service.py          # ChatOpenAI 单例
+│       │   ├── photo_service.py        # Unsplash 图片搜索
+│       │   ├── cache.py                # Redis 行程缓存（路由层调用，精确匹配 + TTL）
+│       │   └── progress.py             # SSE 进度事件管理（含流式 token 事件）
+│       ├── models/
+│       │   └── schemas.py              # Pydantic 数据模型 + 输入校验
+│       └── config.py                   # 配置管理 + 日志初始化
 ├── frontend/                   # 前端应用
 │   ├── src/
-│   │   ├── components/        # Vue组件
-│   │   ├── services/          # API服务
-│   │   ├── types/             # TypeScript类型
-│   │   └── views/             # 页面视图
+│   │   ├── services/api.ts             # API 客户端 + SSE 流解析
+│   │   ├── types/index.ts              # TypeScript 类型定义
+│   │   └── views/
+│   │       ├── Home.vue                # 表单 + SSE 进度条
+│   │       └── Result.vue              # 行程展示 / 编辑 / 导出
 │   ├── package.json
 │   └── vite.config.ts
-└── README.md
+└── mcp-server/                 # 独立 Amap MCP Server
+    └── server.py               # FastMCP + 高德 REST API
 ```
 
 ## 🚀 快速开始
@@ -63,150 +98,95 @@ helloagents-trip-planner/
 ### 前提条件
 
 - Python 3.10+
-- Node.js 16+
-- 高德地图API密钥 (Web服务API和Web端(JS API))
-- LLM API密钥 (OpenAI/DeepSeek等)
+- Node.js 18+
+- 高德地图 API 密钥（Web 服务 API Key + Web 端 JS API Key）
+- LLM API 密钥（OpenAI / DeepSeek / SiliconFlow 等 OpenAI 兼容接口）
+- Unsplash Access Key（可选，用于景点图片）
 
-### 后端安装
+### 环境变量
 
-1. 进入后端目录
+在项目根目录创建 `.env` 文件：
+
+```env
+# 高德地图
+AMAP_API_KEY=your_amap_api_key
+
+# LLM
+LLM_API_KEY=your_api_key
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_MODEL_ID=gpt-4o
+LLM_TIMEOUT=300
+
+# Redis 缓存（可选，为空则自动禁用）
+REDIS_URL=redis://localhost:6379/0
+
+# Unsplash（可选）
+UNSPLASH_ACCESS_KEY=your_unsplash_key
+
+# 日志级别
+LOG_LEVEL=INFO
+```
+
+### 后端启动
+
 ```bash
 cd backend
+python run.py
 ```
 
-2. 创建虚拟环境
-```bash
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-```
+### 前端启动
 
-3. 安装依赖
-```bash
-pip install -r requirements.txt
-```
-
-4. 配置环境变量
-```bash
-cp .env.example .env
-# 编辑.env文件,填入你的API密钥
-```
-
-5. 启动后端服务
-```bash
-uvicorn app.api.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-### 前端安装
-
-1. 进入前端目录
 ```bash
 cd frontend
-```
-
-2. 安装依赖
-```bash
-npm install
-```
-
-3. 配置环境变量
-```bash
-# 创建.env文件, 填入高德地图Web API Key 和 Web端JS API Key
-cp .env.example .env
-```
-
-4. 启动开发服务器
-```bash
 npm run dev
 ```
 
-5. 打开浏览器访问 `http://localhost:5173`
+访问 `http://localhost:5173`
 
 ## 📝 使用指南
 
-1. 在首页填写旅行信息:
-   - 目的地城市
-   - 旅行日期和天数
-   - 交通方式偏好
-   - 住宿偏好
-   - 旅行风格标签
+1. 在首页填写旅行信息（目的地、日期、交通、住宿、偏好标签）
+2. 点击"生成旅行计划"，实时查看 SSE 进度
+3. LangGraph 执行流程：
+   - **景点搜索 Agent** → 调用 MCP `search_poi`
+   - **天气查询 + 酒店搜索 Agent**（并行） → 调用 MCP `get_weather` / `search_poi`
+   - **行程规划 Agent** → 整合信息生成完整 JSON 行程
+4. 查看结果：每日行程、地图标记、天气预报、预算汇总
+5. 支持行程编辑、PNG/PDF 导出
 
-2. 点击"生成旅行计划"按钮
+## 📄 API 文档
 
-3. 系统将:
-   - 调用HelloAgents Agent生成初步计划
-   - Agent自动调用高德地图MCP工具搜索景点
-   - Agent获取天气信息和路线规划
-   - 整合所有信息生成完整行程
+启动后端服务后，访问 `http://localhost:8000/docs` 查看完整 API 文档。
 
-4. 查看结果:
-   - 每日详细行程
-   - 景点信息与地图标记
-   - 交通路线规划
-   - 天气预报
-   - 餐饮推荐
+主要端点：
+- `POST /api/trip/plan` — 生成旅行计划（同步）
+- `POST /api/trip/plan/stream` — 生成旅行计划（SSE 流式，推荐）
+- `POST /api/trip/photos` — 批量获取景点图片
+- `GET /api/trip/health` — 服务健康检查
 
-## 🔧 核心实现
+## 🔧 工业级特性
 
-### HelloAgents Agent集成
-
-```python
-from hello_agents import SimpleAgent, HelloAgentsLLM
-from hello_agents.tools import MCPTool
-
-# 创建高德地图MCP工具
-amap_tool = MCPTool(
-    name="amap",
-    server_command=["uvx", "amap-mcp-server"],
-    env={"AMAP_MAPS_API_KEY": "your_api_key"},
-    auto_expand=True
-)
-
-# 创建旅行规划Agent
-agent = SimpleAgent(
-    name="旅行规划助手",
-    llm=HelloAgentsLLM(),
-    system_prompt="你是一个专业的旅行规划助手..."
-)
-
-# 添加工具
-agent.add_tool(amap_tool)
-```
-
-### MCP工具调用
-
-Agent可以自动调用以下高德地图MCP工具:
-- `maps_text_search`: 搜索景点POI
-- `maps_weather`: 查询天气
-- `maps_direction_walking_by_address`: 步行路线规划
-- `maps_direction_driving_by_address`: 驾车路线规划
-- `maps_direction_transit_integrated_by_address`: 公共交通路线规划
-
-## 📄 API文档
-
-启动后端服务后,访问 `http://localhost:8000/docs` 查看完整的API文档。
-
-主要端点:
-- `POST /api/trip/plan` - 生成旅行计划
-- `GET /api/map/poi` - 搜索POI
-- `GET /api/map/weather` - 查询天气
-- `POST /api/map/route` - 规划路线
-
-## 🤝 贡献指南
-
-欢迎提交Pull Request或Issue!
-
-## 📜 开源协议
-
-CC BY-NC-SA 4.0
+| 特性 | 实现 |
+|------|------|
+| **结构化日志** | Python `logging` 模块，统一格式 `时间 \| 级别 \| 模块 \| 消息` |
+| **请求追踪** | `RequestIDMiddleware`，每个请求分配唯一 ID，贯穿全链路 |
+| **接口限流** | `RateLimitMiddleware`，同一 IP 每分钟 10 次规划请求 |
+| **Agent 并行化** | 天气查询与酒店搜索并行执行，减少总延迟 |
+| **指数退避重试** | 每个 Agent 节点最多重试 2 次，间隔指数增长 |
+| **节点级容错** | 单节点失败自动降级，不阻断整条管线 |
+| **Redis 行程缓存** | 路由层精确匹配缓存（TTL 24h），命中时跳过全部 Agent 执行；`REDIS_URL` 为空自动禁用 |
+| **SSE 实时进度** | Agent 执行到 UI 进度条的全链路闭环，心跳保持连接 |
+| **MCP 配置解耦** | `mcp_servers.json` 标准格式，零代码切换工具 Server |
 
 ## 🙏 致谢
 
-- [HelloAgents](https://github.com/datawhalechina/Hello-Agents) - 智能体教程
-- [HelloAgents框架](https://github.com/jjyaoao/HelloAgents) - 智能体框架
-- [高德地图开放平台](https://lbs.amap.com/) - 地图服务
-- [amap-mcp-server](https://github.com/sugarforever/amap-mcp-server) - 高德地图MCP服务器
+- [LangGraph](https://github.com/langchain-ai/langgraph) — 多智能体编排框架
+- [LangChain](https://github.com/langchain-ai/langchain) — LLM 应用开发框架
+- [FastMCP](https://github.com/modelcontextprotocol/python-sdk) — MCP Server 框架
+- [高德地图开放平台](https://lbs.amap.com/) — 地图服务
+- [Unsplash](https://unsplash.com/) — 景点图片
 
 ---
 
-**HelloAgents智能旅行助手** - 让旅行计划变得简单而智能 🌈
+**智能旅行助手** - 让旅行计划变得简单而智能 🌈
 
