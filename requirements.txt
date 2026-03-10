@@ -38,6 +38,11 @@ loguru>=0.7.0                   # 结构化日志
 python-dateutil>=2.8.2          # 日期解析工具
 redis[asyncio]>=5.0.0           # 异步 Redis 客户端（行程计划缓存，REDIS_URL 为空时自动禁用）
 
+# 测试框架
+pytest>=8.0.0                   # 单元测试框架
+pytest-asyncio>=0.24.0          # asyncio 测试支持
+pytest-cov>=5.0.0               # 覆盖率统计
+
 
 # -----------------------------------------------------------------------------
 # [mcp-server]  独立 Amap MCP Server（FastMCP 实现，stdio 子进程）

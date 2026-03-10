@@ -34,31 +34,64 @@ async def plan_trip(request: TripRequest):
     生成旅行计划
     """
     try:
-        logger.info("收到旅行规划请求 | 城市=%s 日期=%s~%s 天数=%d",
-                    request.city, request.start_date, request.end_date, request.travel_days)
+        mode = request.execution_mode or "parallel_cache"
+        logger.info("收到旅行规划请求 | 城市=%s 日期=%s~%s 天数=%d 模式=%s",
+                    request.city, request.start_date, request.end_date, request.travel_days, mode)
 
-        # 缓存查找
-        cache_key = make_cache_key(request)
-        cached = await get_cached_plan(cache_key)
-        if cached:
-            from ...models.schemas import TripPlan
-            try:
-                return TripPlanResponse(success=True, message="旅行计划生成成功（缓存）", data=TripPlan(**cached))
-            except Exception:
-                pass
+        # 仅 parallel_cache 模式使用缓存
+        cache_hit = False
+        if mode == "parallel_cache":
+            cache_key = make_cache_key(request)
+            cached = await get_cached_plan(cache_key)
+            if cached:
+                from ...models.schemas import TripPlan
+                try:
+                    return TripPlanResponse(
+                        success=True,
+                        message="旅行计划生成成功（缓存）",
+                        data=TripPlan(**cached),
+                        cache_hit=True,
+                        execution_mode=mode,
+                        fallback_used=False,
+                    )
+                except Exception:
+                    pass
+
+        # 确定 agent 模式
+        mode_to_agent = {
+            "sequential": "sequential",
+            "parallel_react": "parallel_react",
+            "parallel_direct": "parallel_direct",
+            "parallel_agent": "parallel_agent",
+            "parallel_cache": "parallel_agent",
+            # 兼容旧名
+            "parallel_no_cache": "parallel_direct",
+        }
+        agent_mode = mode_to_agent.get(mode, "parallel_agent")
 
         agent = get_trip_planner_agent()
-        trip_plan = await agent.plan_trip(request)
+        trip_plan = await agent.plan_trip(request, mode=agent_mode)
 
-        # 写缓存
-        await set_cached_plan(cache_key, trip_plan.model_dump(), get_settings().trip_cache_ttl)
+        # 检测是否使用了 fallback（fallback 生成的景点名含固定模式）
+        fallback_used = False
+        if trip_plan.days and trip_plan.days[0].attractions:
+            first_attr = trip_plan.days[0].attractions[0].name
+            if "景点1" in first_attr or "景点2" in first_attr:
+                fallback_used = True
 
-        logger.info("旅行计划生成成功 | 城市=%s", request.city)
+        # 仅 parallel_cache 模式写缓存
+        if mode == "parallel_cache":
+            await set_cached_plan(cache_key, trip_plan.model_dump(), get_settings().trip_cache_ttl)
+
+        logger.info("旅行计划生成成功 | 城市=%s 模式=%s", request.city, mode)
 
         return TripPlanResponse(
             success=True,
             message="旅行计划生成成功",
-            data=trip_plan
+            data=trip_plan,
+            cache_hit=cache_hit,
+            execution_mode=mode,
+            fallback_used=fallback_used,
         )
 
     except Exception as e:

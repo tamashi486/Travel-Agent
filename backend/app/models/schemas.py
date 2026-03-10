@@ -18,6 +18,10 @@ class TripRequest(BaseModel):
     accommodation: str = Field(..., description="住宿偏好", example="经济型酒店")
     preferences: List[str] = Field(default=[], description="旅行偏好标签", example=["历史文化", "美食"])
     free_text_input: Optional[str] = Field(default="", description="额外要求", example="希望多安排一些博物馆")
+    execution_mode: Optional[str] = Field(
+        default="parallel_agent",
+        description="执行模式: sequential | parallel_react | parallel_direct | parallel_agent | parallel_cache",
+    )
 
     @field_validator('city')
     @classmethod
@@ -183,6 +187,9 @@ class TripPlanResponse(BaseModel):
     success: bool = Field(..., description="是否成功")
     message: str = Field(default="", description="消息")
     data: Optional[TripPlan] = Field(default=None, description="旅行计划数据")
+    cache_hit: Optional[bool] = Field(default=None, description="是否命中缓存")
+    execution_mode: Optional[str] = Field(default=None, description="执行模式")
+    fallback_used: Optional[bool] = Field(default=None, description="是否使用了降级方案")
 
 
 class POIInfo(BaseModel):

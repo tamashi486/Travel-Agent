@@ -12,6 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from ..config import get_settings, validate_config, print_config, setup_logging
 from .routes import trip
+from ..agents.trip_planner_agent import shutdown_mcp_client
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,8 @@ async def lifespan(app: FastAPI):
         raise
     logger.info("API文档: http://localhost:%d/docs", settings.port)
     yield
+    # 应用关闭时清理 MCP 子进程
+    await shutdown_mcp_client()
     logger.info("应用关闭")
 
 
@@ -86,7 +89,7 @@ class RequestIDMiddleware(BaseHTTPMiddleware):
 
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """简易内存限流：同一 IP 每分钟最多 N 次规划请求"""
-    RATE_LIMIT = 10  # 每分钟
+    RATE_LIMIT = settings.rate_limit_per_minute
     WINDOW = 60  # 秒
 
     def __init__(self, app):

@@ -52,7 +52,7 @@ class Settings(BaseSettings):
     unsplash_access_key: str = ""
 
     # Redis 缓存（REDIS_URL 为空则禁用缓存，不影响主流程）
-    redis_url: str = ""          # e.g. redis://localhost:6379/0
+    redis_url: str = "redis://localhost:6379"          # e.g. redis://localhost:6379/0
     trip_cache_ttl: int = 86400  # 缓存有效期（秒），默认 24 小时
 
     # LLM（字段名与 .env 中一致）
@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     llm_base_url: str = ""
     llm_model_id: str = "gpt-4o"
     llm_timeout: int = 300
+
+    # 限流（每 IP 每分钟规划请求数，可通过环境变量 RATE_LIMIT_PER_MINUTE 调整）
+    rate_limit_per_minute: int = 10
 
     class Config:
         env_file = str(_ENV_FILE)
